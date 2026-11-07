@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pulsómetro Gatuno</title>
+<style>
+/* Concepto: una sola columna, lectura grande de lpm arriba, onda en vivo debajo, controles al pulgar. */
+:root {
+  --bg: #eef3f2;
+  --surface: #ffffff;
+  --fg: #12201f;
+  --muted: #55696a;
+  --line: #cfdcda;
+  --accent: #0b7f72;
+  --accent-fg: #ffffff;
+  --heart: #d6334f;
+  --warn: #a45a00;
+  --wave: #0b7f72;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1819; --surface: #152324; --fg: #e6f1ef; --muted: #8fa7a6; --line: #263a3b;
+    --accent: #3fc7b5; --accent-fg: #06201c; --heart: #ff6b82; --warn: #f0b04f; --wave: #3fc7b5;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1819; --surface: #152324; --fg: #e6f1ef; --muted: #8fa7a6; --line: #263a3b;
+  --accent: #3fc7b5; --accent-fg: #06201c; --heart: #ff6b82; --warn: #f0b04f; --wave: #3fc7b5;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-block: max(20px, env(safe-area-inset-top, 0px)) max(28px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 34rem; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-size: 1.5rem; line-height: 1.15; margin: 0 0 4px; text-wrap: balance; letter-spacing: -0.01em; }
+.sub { margin: 0; color: var(--muted); }
+.stage { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+.readout { display: flex; align-items: center; gap: 16px; }
+#dot { width: 22px; height: 22px; border-radius: 50%; background: var(--line); flex: none; }
+#dot.live { background: var(--heart); animation: beat var(--beat, .32s) ease-out infinite; }
+@keyframes beat { 0% { transform: scale(1.45); } 100% { transform: scale(1); } }
+.bpm { font-size: 4rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.bpm.dim { color: var(--muted); }
+.unit { color: var(--muted); font-size: .9rem; }
+canvas { width: 100%; height: 120px; display: block; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.meters { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.meter label { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.track { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.fill { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+#status { min-height: 3em; font-size: .95rem; }
+#status.warn { color: var(--warn); }
+.buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 13px 18px; background: var(--accent); color: var(--accent-fg); flex: 1 1 12rem; cursor: pointer; }
+button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); font-weight: 500; }
+button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+.how h2, .result h2 { font-size: 1rem; margin: 0 0 8px; }
+.how ol { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.result { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--surface); }
+.result .big { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.result p { margin: 6px 0 0; color: var(--muted); font-size: .92rem; }
+.note { color: var(--muted); font-size: .85rem; }
+@media (prefers-reduced-motion: reduce) { #dot.live { animation: none; } .fill { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Pulsómetro Gatuno</h1>
+    <p class="sub">Estima los latidos por minuto de tu gato con las vibraciones que capta el teléfono.</p>
+  </header>
+
+  <section class="stage" aria-live="polite">
+    <div class="readout">
+      <div id="dot"></div>
+      <div>
+        <div id="bpm" class="bpm dim">—</div>
+        <div class="unit">latidos por minuto</div>
+      </div>
+    </div>
+    <canvas id="wave" aria-label="Señal del sensor filtrada"></canvas>
+    <div class="meters">
+      <div class="meter"><label><span>Calidad</span><span id="qtxt">—</span></label><div class="track"><div id="qfill" class="fill"></div></div></div>
+      <div class="meter"><label><span>Tiempo</span><span id="time">30 s</span></label><div class="track"><div id="pfill" class="fill"></div></div></div>
+    </div>
+    <div id="status">Listo. Acomoda al gato y al teléfono como indican los pasos de abajo.</div>
+    <div class="buttons">
+      <button id="start">Empezar medición</button>
+      <button id="demo" class="ghost">Probar con señal de ejemplo</button>
+    </div>
+  </section>
+
+  <section id="result" class="result" hidden>
+    <h2>Resultado</h2>
+    <div id="rbig" class="big"></div>
+    <p id="rtxt"></p>
+  </section>
+
+  <section class="how">
+    <h2>Cómo colocarlo</h2>
+    <ol>
+      <li>Con el gato tranquilo y acostado de lado. Si ronronea, espera: el ronroneo tapa el latido.</li>
+      <li>Apoya el teléfono plano sobre su pecho, justo detrás del codo de la pata delantera izquierda, donde está el corazón.</li>
+      <li>Pulsa <b>Empezar medición</b> y suelta el teléfono. Si lo sostienes con la mano, el sensor mide tu pulso y tu temblor, no el del gato.</li>
+      <li>Quédate sin moverte 30 segundos. Cuanto más quieto esté todo, mejor sale la medición.</li>
+    </ol>
+    <p class="note">Es una estimación orientativa. En reposo, un gato sano suele estar entre 140 y 220 latidos por minuto. Si algo te preocupa, consulta a un veterinario.</p>
+  </section>
+</main>
+
+<script id="dsp">
+const DSP = (() => {
+  const FS = 50;            // frecuencia de remuestreo (Hz)
+  const WIN = 15;           // ventana de análisis (s)
+  const FMIN = 1.8, FMAX = 4.9; // 108 a 294 lpm
+  const HP = 1.6, LP = 5.4;     // banda del filtro
+
+  function resample(ts, chans, t0, t1) {
+    const n = Math.floor((t1 - t0) / 1000 * FS);
+    const out = chans.map(() => new Float32Array(n));
+    let j = 0;
+    for (let i = 0; i < n; i++) {
+      const t = t0 + i * 1000 / FS;
+      while (j < ts.length - 2 && ts[j + 1] < t) j++;
+      const a = ts[j], b = ts[j + 1];
+      const u = b > a ? Math.min(1, Math.max(0, (t - a) / (b - a))) : 0;
+      for (let c = 0; c < chans.length; c++) out[c][i] = chans[c][j] * (1 - u) + chans[c][j + 1] * u;
+    }
+    return out;
+  }
+
+  function biquad(type, f0, Q = Math.SQRT1_2) {
+    const w = 2 * Math.PI * f0 / FS, c = Math.cos(w), al = Math.sin(w) / (2 * Q);
+    let b0, b1, b2;
+    if (type === 'lp') { b0 = (1 - c) / 2; b1 = 1 - c; b2 = b0; }
+    else { b0 = (1 + c) / 2; b1 = -(1 + c); b2 = b0; }
+    const a0 = 1 + al;
+    return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2 * c / a0, a2: (1 - al) / a0 };
+  }
+  function run(f, x) {
+    const y = new Float32Array(x.length);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) {
+      const v = f.b0 * x[i] + f.b1 * x1 + f.b2 * x2 - f.a1 * y1 - f.a2 * y2;
+      y[i] = v; x2 = x1; x1 = x[i]; y2 = y1; y1 = v;
+    }
+    return y;
+  }
+  const rev = x => Float32Array.from(x).reverse();
+  const zeroPhase = (f, x) => rev(run(f, rev(run(f, x))));
+  const hpF = biquad('hp', HP), lpF = biquad('lp', LP);
+  const bandpass = x => zeroPhase(lpF, zeroPhase(hpF, x));
+
+  function mean(x) { let s = 0; for (let i = 0; i < x.length; i++) s += x[i]; return s / x.length; }
+  function std(x) { const m = mean(x); let s = 0; for (let i = 0; i < x.length; i++) s += (x[i] - m) ** 2; return Math.sqrt(s / x.length); }
+
+  // Combina los canales (acelerómetro y giroscopio) en una sola señal: componente principal.
+  function combine(chs) {
+    const k = chs.length, n = chs[0].length;
+    const C = Array.from({ length: k }, () => new Float64Array(k));
+    for (let a = 0; a < k; a++) for (let b = a; b < k; b++) {
+      let s = 0; for (let i = 0; i < n; i++) s += chs[a][i] * chs[b][i];
+      C[a][b] = C[b][a] = s / n;
+    }
+    let v = new Float64Array(k).fill(1 / Math.sqrt(k));
+    for (let it = 0; it < 40; it++) {
+      const w = new Float64Array(k);
+      for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) w[a] += C[a][b] * v[b];
+      let nr = 0; for (let a = 0; a < k; a++) nr += w[a] * w[a];
+      nr = Math.sqrt(nr) || 1;
+      for (let a = 0; a < k; a++) v[a] = w[a] / nr;
+    }
+    const out = new Float32Array(n);
+    for (let c = 0; c < k; c++) for (let i = 0; i < n; i++) out[i] += v[c] * chs[c][i];
+    return out;
+  }
+
+  function spectrum(x) {
+    const n = x.length, win = new Float32Array(n);
+    for (let i = 0; i < n; i++) win[i] = x[i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)));
+    const freqs = [], pow = [];
+    for (let f = FMIN - 0.3; f <= FMAX + 0.001; f += 0.02) {
+      let re = 0, im = 0;
+      const w = 2 * Math.PI * f / FS;
+      for (let i = 0; i < n; i++) { re += win[i] * Math.cos(w * i); im += win[i] * Math.sin(w * i); }
+      freqs.push(f); pow.push(re * re + im * im);
+    }
+    return { freqs, pow };
+  }
+
+  // ts en ms, chans: 6 arreglos [ax, ay, az, gx, gy, gz]. Devuelve null si faltan datos.
+  function analyze(ts, chans) {
+    const nTs = ts.length;
+    if (nTs < 20) return null;
+    const t1 = ts[nTs - 1];
+    const t0 = Math.max(ts[0], t1 - WIN * 1000);
+    if (t1 - t0 < 9000) return null;
+    let s = 0; while (s < nTs - 3 && ts[s + 1] < t0) s++;
+    const rs = resample(ts.slice(s), chans.map(c => c.slice(s)), t0, t1);
+
+    // movimiento brusco en los últimos 2 s (magnitud del acelerómetro)
+    const n = rs[0].length, m = Math.min(n, 2 * FS);
+    const mag = new Float32Array(m);
+    for (let i = 0; i < m; i++) { const j = n - m + i; mag[i] = Math.hypot(rs[0][j], rs[1][j], rs[2][j]); }
+    const mm = mean(mag); let motion = 0;
+    for (let i = 0; i < m; i++) motion = Math.max(motion, Math.abs(mag[i] - mm));
+
+    const TRIM = FS;
+    const used = [];
+    for (const ch of rs) {
+      const mu = mean(ch); const c0 = ch.map(v => v - mu);
+      const bp = bandpass(c0).subarray(TRIM, ch.length - TRIM);
+      const sd = std(bp);
+      if (sd > 1e-9) used.push(bp.map(v => v / sd));
+    }
+    if (!used.length) return null;
+    const sig = combine(used);
+
+    const { freqs, pow } = spectrum(sig);
+    let iBand0 = freqs.findIndex(f => f >= FMIN), best = iBand0;
+    for (let i = iBand0; i < freqs.length; i++) if (pow[i] > pow[best]) best = i;
+    // si hay energía fuerte a la mitad de la frecuencia, ese es el latido y lo otro su armónico
+    const half = freqs[best] / 2;
+    if (half >= FMIN) {
+      let hi = freqs.findIndex(f => f >= half - 0.04), hb = hi;
+      for (let i = hi; i < freqs.length && freqs[i] <= half + 0.04; i++) if (pow[i] > pow[hb]) hb = i;
+      if (pow[hb] >= 0.45 * pow[best]) best = hb;
+    }
+    // refinar con parábola
+    let f = freqs[best];
+    if (best > 0 && best < freqs.length - 1) {
+      const a = pow[best - 1], b = pow[best], c = pow[best + 1], d = a - 2 * b + c;
+      if (d < 0) f += 0.02 * 0.5 * (a - c) / d;
+    }
+    let sum = 0, cnt = 0;
+    for (let i = iBand0; i < freqs.length; i++) if (Math.abs(freqs[i] - f) > 0.12) { sum += pow[i]; cnt++; }
+    const ratio = pow[best] / (sum / Math.max(1, cnt));
+    return { sig, bpm: f * 60, ratio, motion };
+  }
+
+  return { analyze, FS, WIN };
+})();
+</script>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const DUR = 30000, MIN_RATIO = 12, MOTION_MAX = 0.45;
+  const S = { mode: 'idle', t: [], ch: [[], [], [], [], [], []], start: 0, est: [], count: 0, timer: null, demo: null, wake: null };
+
+  function reset() {
+    S.t = []; S.ch.forEach(a => a.length = 0); S.est = []; S.count = 0;
+    $('bpm').textContent = '—'; $('bpm').classList.add('dim'); $('dot').classList.remove('live');
+    $('qfill').style.width = '0%'; $('qtxt').textContent = '—'; $('pfill').style.width = '0%'; $('time').textContent = '30 s';
+    $('result').hidden = true; setStatus('', false);
+  }
+  function setStatus(msg, warn) { const s = $('status'); s.textContent = msg; s.classList.toggle('warn', !!warn); }
+
+  function onMotion(e) {
+    const a = e.accelerationIncludingGravity, r = e.rotationRate;
+    if (!a || a.x == null) return;
+    const t = performance.now();
+    if (S.t.length && t <= S.t[S.t.length - 1]) return;
+    push(t, a.x, a.y, a.z, r ? r.alpha || 0 : 0, r ? r.beta || 0 : 0, r ? r.gamma || 0 : 0);
+  }
+  function push(t, ...v) {
+    S.t.push(t); v.forEach((x, i) => S.ch[i].push(x)); S.count++;
+    const cut = t - 40000;
+    if (S.t[0] < cut - 5000) { let k = 0; while (S.t[k] < cut) k++; S.t.splice(0, k); S.ch.forEach(a => a.splice(0, k)); }
+  }
+
+  async function askPermission() {
+    try {
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        return (await DeviceMotionEvent.requestPermission()) === 'granted';
+      }
+    } catch (e) { return false; }
+    return true;
+  }
+
+  async function begin(demo) {
+    if (S.mode !== 'idle') return;
+    reset();
+    if (!demo) {
+      const ok = await askPermission();
+      if (!ok) { setStatus('Sin permiso para leer el sensor de movimiento. Actívalo en los ajustes del navegador y vuelve a intentar.', true); return; }
+      window.addEventListener('devicemotion', onMotion);
+    } else { startDemo(); }
+    S.mode = demo ? 'demo' : 'live'; S.start = performance.now();
+    try { if (navigator.wakeLock) S.wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    $('start').textContent = 'Detener'; $('demo').disabled = true;
+    setStatus(demo ? 'Señal de ejemplo (simulada, no es un gato). Midiendo…' : 'Midiendo. Suelta el teléfono y no te muevas.', false);
+    S.timer = setInterval(tick, 500);
+  }
+
+  function startDemo() {
+    const f0 = 190 / 60; let n = 0;
+    S.demo = setInterval(() => {
+      const t = performance.now(), s = t / 1000;
+      const rnd = () => (Math.random() + Math.random() + Math.random() - 1.5) * 0.02;
+      const heart = 0.03 * Math.sin(2 * Math.PI * f0 * s) + 0.015 * Math.sin(4 * Math.PI * f0 * s + 1);
+      const breath = 0.05 * Math.sin(2 * Math.PI * 0.75 * s);
+      push(t, rnd(), rnd(), 9.81 + heart + breath + rnd(), rnd() * 8 + heart * 12, rnd() * 8, rnd() * 8);
+      n++;
+    }, 1000 / 60);
+  }
+
+  function stop(finish) {
+    clearInterval(S.timer); clearInterval(S.demo);
+    window.removeEventListener('devicemotion', onMotion);
+    try { if (S.wake) S.wake.release(); } catch (e) {} S.wake = null;
+    const wasDemo = S.mode === 'demo';
+    S.mode = 'idle'; $('start').textContent = 'Empezar medición'; $('demo').disabled = false;
+    $('dot').classList.remove('live');
+    if (finish) showResult(wasDemo); else setStatus('Medición detenida.', false);
+  }
+
+  function median(a) { const b = [...a].sort((x, y) => x - y); const m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; }
+
+  function tick() {
+    const el = performance.now() - S.start;
+    $('pfill').style.width = Math.min(100, el / DUR * 100) + '%';
+    $('time').textContent = Math.max(0, Math.ceil((DUR - el) / 1000)) + ' s';
+    if (el > 2500 && S.count === 0) {
+      stop(false);
+      setStatus('El teléfono no está enviando datos del sensor. Abre este archivo directamente en Chrome (Android) o Safari (iPhone), no dentro de una vista previa, y permite el acceso a movimiento.', true);
+      return;
+    }
+    const r = DSP.analyze(S.t, S.ch);
+    if (r) {
+      draw(r.sig);
+      const good = r.ratio >= MIN_RATIO && r.motion < MOTION_MAX;
+      S.est.push({ bpm: r.bpm, ratio: r.ratio, good });
+      const recent = S.est.slice(-4).filter(e => e.good).map(e => e.bpm);
+      const stable = recent.length >= 3 && Math.max(...recent) - Math.min(...recent) < 10;
+      $('qfill').style.width = Math.min(100, Math.max(0, (r.ratio - 3) / (MIN_RATIO * 1.4 - 3)) * 100) + '%';
+      $('qtxt').textContent = stable ? 'Buena' : r.ratio >= MIN_RATIO * 0.6 ? 'Regular' : 'Débil';
+      const out = $('bpm');
+      if (stable) {
+        const v = Math.round(median(recent)); out.textContent = v; out.classList.remove('dim');
+        $('dot').style.setProperty('--beat', (60 / v) * 0.9 + 's'); $('dot').classList.add('live');
+        setStatus('Señal clara. Sigue sin moverte hasta que termine el conteo.', false);
+      } else {
+        out.textContent = '—'; out.classList.add('dim'); $('dot').classList.remove('live');
+        setStatus(r.motion >= MOTION_MAX ? 'Hay movimiento fuerte. Pide al gato que se quede quieto y no toques el teléfono.' : 'Buscando el latido. Aún no hay una señal clara.', r.motion >= MOTION_MAX);
+      }
+    } else {
+      setStatus('Reuniendo datos… la primera lectura llega a los 10 segundos.', false);
+    }
+    if (el >= DUR) stop(true);
+  }
+
+  function showResult(wasDemo) {
+    const good = S.est.filter(e => e.good).slice(-12).map(e => e.bpm);
+    const box = $('result'); box.hidden = false;
+    if (good.length < 4) {
+      $('rbig').textContent = 'Sin lectura confiable';
+      $('rtxt').textContent = 'No se distinguió un latido claro. Prueba de nuevo con el gato dormido o muy tranquilo, sin ronroneo, el teléfono plano sobre el corazón y sin tocarlo.';
+      setStatus('Terminó la medición.', false); return;
+    }
+    const v = Math.round(median(good)), lo = Math.round(Math.min(...good)), hi = Math.round(Math.max(...good));
+    $('rbig').textContent = v + ' lpm';
+    let txt = 'Rango durante la medición: ' + lo + ' a ' + hi + ' lpm. ';
+    if (wasDemo) txt += 'Es una señal simulada de 190 lpm, sirve para comprobar que la app calcula bien.';
+    else if (v < 140) txt += 'Está por debajo del rango habitual de reposo (140 a 220). Repite la medición con el gato más tranquilo.';
+    else if (v > 220) txt += 'Está por encima del rango habitual de reposo (140 a 220). Puede ser nerviosismo; repite cuando esté calmado.';
+    else txt += 'Está dentro del rango habitual de reposo (140 a 220).';
+    $('rtxt').textContent = txt;
+    setStatus('Terminó la medición.', false);
+  }
+
+  function draw(sig) {
+    const cv = $('wave'), dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+    const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+    const n = Math.min(sig.length, 8 * DSP.FS), a = sig.subarray(sig.length - n);
+    let mx = 1e-9; for (let i = 0; i < n; i++) mx = Math.max(mx, Math.abs(a[i]));
+    g.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--wave').trim() || '#0b7f72';
+    g.lineWidth = 2; g.lineJoin = 'round'; g.beginPath();
+    for (let i = 0; i < n; i++) { const x = i / (n - 1) * w, y = h / 2 - a[i] / mx * (h / 2 - 8); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+    g.stroke();
+  }
+
+  $('start').addEventListener('click', () => { if (S.mode === 'idle') begin(false); else stop(false); });
+  $('demo').addEventListener('click', () => begin(true));
+})();
+</script>
+</body>
+</html>
